@@ -15,7 +15,7 @@ class ClassifierParameters:
     # Computation device: 'cuda' or 'cpu'
     device = 'cpu'
     # Number of hidden units in the neural network.
-    n_hidden_units = 10
+    n_hidden_units = 50
     # Number of training epochs.
     n_epochs = 100
     # Size of batches: how many documents to process in parallel.
@@ -23,9 +23,9 @@ class ClassifierParameters:
     # Learning rate in the optimizer.
     learning_rate = 5e-3
     # Weight decay (L2 regularization) in the optimizer (if necessary).
-    decay = 0
+    decay = 1e-5
     # Dropout probability (if necessary).
-    dropout = 0
+    dropout = 0.5
 
 def make_model(clf):
     input_size = clf.input_size
@@ -35,8 +35,12 @@ def make_model(clf):
         nn.BatchNorm1d(input_size),
         nn.Linear(input_size, hidden_size),
         nn.ReLU(),
+        #nn.BatchNorm1d(hidden_size),
+        #nn.Dropout(p=clf.params.dropout),
+        #nn.Linear(hidden_size, hidden_size),
+        #nn.ReLU(),
         nn.BatchNorm1d(hidden_size),
-        nn.Dropout(),
+        nn.Dropout(p=clf.params.dropout),
         nn.Linear(hidden_size, output_size),
         nn.Softmax(dim=1)
         )
@@ -166,7 +170,7 @@ class NNClassifier:
             # (that is, by summing or averaging).
             # In the end, the loss value needs to be a single number so
             # that we can compute gradients and update our model later.
-            loss = self.loss_func(scores, Ybatch)
+            loss = self.loss_func(scores, Ybatch.long())
 
             total_loss += loss.item()
 
