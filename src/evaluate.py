@@ -14,8 +14,8 @@ def acc_str(stats, key):
 
 if __name__ == '__main__':
 
-    gf = open(sys.argv[1])
-    pf = open(sys.argv[2])
+    gf = open(sys.argv[1], encoding='utf-8')
+    pf = open(sys.argv[2], encoding='utf-8')
 
     SKIP = 0
     COL = 0

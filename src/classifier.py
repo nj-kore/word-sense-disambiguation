@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from sklearn.preprocessing import LabelEncoder
 from torch import nn
 from torch.utils.data import DataLoader
 import time
@@ -33,12 +34,9 @@ def make_model(clf):
     hidden_size = clf.params.n_hidden_units
     model = nn.Sequential(
         nn.BatchNorm1d(input_size),
+        #nn.Dropout(p=clf.params.dropout),
         nn.Linear(input_size, hidden_size),
         nn.ReLU(),
-        #nn.BatchNorm1d(hidden_size),
-        #nn.Dropout(p=clf.params.dropout),
-        #nn.Linear(hidden_size, hidden_size),
-        #nn.ReLU(),
         nn.BatchNorm1d(hidden_size),
         nn.Dropout(p=clf.params.dropout),
         nn.Linear(hidden_size, output_size),
@@ -53,6 +51,8 @@ class NNClassifier:
     def __init__(self):
         self.params = ClassifierParameters()
         self.model_factory = make_model
+        self.lowest_loss = torch.inf
+        self.early_stopping_itr = 0
 
     def preprocess(self, X, Y):
         """Carry out the document preprocessing, then build `DataLoader`s for the
@@ -125,6 +125,7 @@ class NNClassifier:
             with torch.no_grad():
                 val_loss, val_acc = self.epoch(self.val_loader)
 
+
             t1 = time.time()
 
             # Store some evaluation metrics in the history object.
@@ -136,6 +137,15 @@ class NNClassifier:
 
             # Show validation-set metrics on the progress bar.
             progress.set_postfix({'val_loss': f'{val_loss:.2f}', 'val_acc': f'{val_acc:.2f}'})
+
+            if val_loss < self.lowest_loss:
+                self.lowest_loss = val_loss
+                self.early_stopping_itr = 0
+            else:
+                self.early_stopping_itr += 1
+
+            if self.early_stopping_itr > 10:
+                break
 
     def epoch(self, batches, optimizer=None):
         """Runs the neural network for one epoch, using the given batches.
@@ -205,7 +215,7 @@ class NNClassifier:
                 Xbatch = Xbatch.to(self.params.device)
 
                 # Compute the output scores.
-                scores = self.model(Xbatch)
+                scores = self.model(Xbatch.float())
                 # scores should have the shape (batch_size, n_classes).
 
                 # For each row, find the position of the highest score. This represents
@@ -219,3 +229,124 @@ class NNClassifier:
 
             # Finally, concatenate all output arrays.
             return np.hstack(outputs)
+
+EMBED_DIM = 100
+class MultiClassifier:
+    def __init__(self):
+        self.classifiers = dict()
+        self.main_lbl_encoder = LabelEncoder()
+        self.label_encoders = dict()
+
+    def preprocess_X(self, vocab, word_embeddings, X_data, lemma_enc):
+
+        start_of_text = 2
+        rel_words = 2
+        # X = np.empty((len(X_data), (EMBED_DIM * 2) + 1), dtype=float)
+        X = []
+        for i, tokens in enumerate(X_data):
+            lemma = tokens[0].split('.')[0]
+            target_loc = int(tokens[1]) + start_of_text
+            start_fwd_pos = max(start_of_text, target_loc - rel_words)
+            start_bckwd_pos = min(target_loc + rel_words + 1, len(tokens) - 1)
+
+            fwd_embedding = np.zeros(EMBED_DIM, dtype=float)
+            for token in tokens[start_fwd_pos:target_loc]:
+                fwd_embedding += word_embeddings[vocab[token]]
+
+            bckwd_embedding = np.zeros(EMBED_DIM, dtype=float)
+            for token in reversed(tokens[target_loc + 1:start_bckwd_pos]):
+                bckwd_embedding += word_embeddings[vocab[token]]
+
+            input_vector = np.zeros(EMBED_DIM * 2 + 1)
+            input_vector[:EMBED_DIM] = fwd_embedding
+            input_vector[EMBED_DIM:-1] = bckwd_embedding
+
+            input_vector = input_vector.tolist()
+            input_vector[-1] = lemma_enc[lemma]
+
+            X.append(input_vector)
+        return X
+
+    def fit(self, X, Y):
+
+        file_glove = open('data/glove.6B/glove.6B.100d.txt', 'r', encoding='utf-8')
+        lines = file_glove.readlines()
+        num_lines = len(lines)
+        self.word_embeddings = np.zeros((num_lines + 1, EMBED_DIM), dtype=float)
+        self.vocab = defaultdict(lambda: num_lines)
+        self.vocab_rev = defaultdict(lambda: '<UNKNOWN>')
+
+        for i, line in enumerate(lines):
+            embed_split = line.split()
+            word = embed_split[0]
+            self.vocab[word] = i
+            self.vocab_rev[i] = word
+
+            embed_vals = np.asarray(embed_split[1:], dtype=float)
+
+            self.word_embeddings[i, :] = embed_vals
+
+        self.word_embeddings[num_lines, :] = np.zeros(EMBED_DIM)
+
+        file_glove.close()
+        categories = []
+        self.lemma_enc = dict()
+        self.num_categories = 0
+        for i, y in enumerate(Y):
+            lemma = y.split('%')[0]
+            if lemma not in self.lemma_enc:
+                self.lemma_enc[lemma] = self.num_categories
+                categories.append(self.num_categories)
+                self.num_categories += 1
+            else:
+                categories.append(self.lemma_enc[lemma])
+
+        X = self.preprocess_X(self.vocab, self.word_embeddings, X, self.lemma_enc)
+
+        self.main_lbl_encoder.fit(Y)
+        Y = self.main_lbl_encoder.transform(Y)
+
+        X_sep = [[] for _ in range(self.num_categories)]
+        Y_sep = [[] for _ in range(self.num_categories)]
+
+        for i in range(len(X)):
+            X_sep[categories[i]].append(X[i])
+            Y_sep[categories[i]].append(Y[i])
+
+        for i in range(self.num_categories):
+            classifier = NNClassifier()
+            lblenc = LabelEncoder()
+            lblenc.fit(Y_sep[i])
+            y_sep_i_enc = lblenc.transform(Y_sep[i])
+            classifier.fit(np.array(X_sep[i]), y_sep_i_enc)
+            self.classifiers[i] = classifier
+            self.label_encoders[i] = lblenc
+
+
+
+    def predict(self, X):
+        X_categories = [[] for _ in range(self.num_categories)]
+
+        for i in range(len(X)):
+            lemma = X[i][0].split('.')[0]
+            X_categories[self.lemma_enc[lemma]].append(i)
+
+        X = self.preprocess_X(self.vocab, self.word_embeddings, X, self.lemma_enc)
+        X_sep = [[] for _ in range(self.num_categories)]
+
+        for i in range(self.num_categories):
+            for j in X_categories[i]:
+                X_sep[i].append(X[j])
+
+
+        all_predictions = ["" for _ in range(len(X))]
+        for i in range(self.num_categories):
+            predictions = self.classifiers[i].predict(np.array(X_sep[i]))
+            predictions = self.label_encoders[i].inverse_transform(predictions)
+            predictions = self.main_lbl_encoder.inverse_transform(predictions)
+            for j, p in enumerate(predictions):
+                all_predictions[X_categories[i][j]] = p
+
+        return all_predictions
+
+
