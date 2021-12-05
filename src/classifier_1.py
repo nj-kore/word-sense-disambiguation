@@ -9,7 +9,8 @@ from collections import defaultdict
 from sklearn.model_selection import train_test_split
 
 EMBED_DIM = 300
-GLOVE_FILE = 'data/glove.6B/glove.6B.' + str(EMBED_DIM) + 'd.txt'
+GLOVE_FILE = 'glove.6B/glove.6B.' + str(EMBED_DIM) + 'd.txt'
+REL_WORDS = 4
 
 class ClassifierParameters:
     """Container class to store the hyperparameters that control the training process."""
@@ -19,8 +20,6 @@ class ClassifierParameters:
     device = 'cpu'
     # Number of hidden units in the neural network.
     n_hidden_units = 300
-    # Number of training epochs.
-    n_epochs = 100
     # Size of batches: how many documents to process in parallel.
     batch_size = 512
     # Learning rate in the optimizer.
@@ -50,11 +49,12 @@ def make_model(clf):
 class NNClassifier:
     """A classifier based on a neural network."""
 
-    def __init__(self):
+    def __init__(self, n_epochs):
         self.params = ClassifierParameters()
         self.model_factory = make_model
         self.lowest_loss = torch.inf
         self.early_stopping_itr = 0
+        self.n_epochs = n_epochs
 
     def preprocess(self, X, Y):
         """Carry out the document preprocessing, then build `DataLoader`s for the
@@ -99,16 +99,13 @@ class NNClassifier:
         optimizer = torch.optim.Adam(self.model.parameters(), lr=par.learning_rate, weight_decay=par.decay)
 
         # We'll log the loss and accuracy scores encountered during training.
-        self.history = defaultdict(list)
 
         # Use the tqdm library to get a progress bar. The progress bar object can be used like
         # any generator-like object.
-        progress = tqdm(range(par.n_epochs), 'Epochs')
+        progress = tqdm(range(self.n_epochs), 'Epochs')
 
         # Go through the dataset for a given number of epochs.
         for epoch in progress:
-            t0 = time.time()
-
             # Set the model in training mode. This affects some components that
             # behave differently at training and evaluation time, such as dropout
             # and various types of normalization (e.g. batch normalization). It is good
@@ -128,14 +125,6 @@ class NNClassifier:
                 val_loss, val_acc = self.epoch(self.val_loader)
 
 
-            t1 = time.time()
-
-            # Store some evaluation metrics in the history object.
-            self.history['train_loss'].append(train_loss)
-            self.history['train_acc'].append(train_acc)
-            self.history['val_loss'].append(val_loss)
-            self.history['val_acc'].append(val_acc)
-            self.history['time'].append(t1 - t0)
 
             # Show validation-set metrics on the progress bar.
             progress.set_postfix({'val_loss': f'{val_loss:.2f}', 'val_acc': f'{val_acc:.2f}'})
@@ -234,63 +223,80 @@ class NNClassifier:
 
 
 class MultiClassifier:
-    def __init__(self):
+    def __init__(self, n_epochs):
         self.classifiers = dict()
         self.main_lbl_encoder = LabelEncoder()
         self.label_encoders = dict()
+        self.n_epochs = n_epochs
 
-    def preprocess_X(self, vocab, word_embeddings, X_data, lemma_enc):
+    def preprocess_X(self, X_data):
+        """Preprocess X by summing embeddings around our target word"""
 
+        # Index of where the text actually starts in the input data
         start_of_text = 2
-        rel_words = 20
-        # X = np.empty((len(X_data), (EMBED_DIM * 2) + 1), dtype=float)
+
         X = []
         for i, tokens in enumerate(X_data):
-            lemma = tokens[0].split('.')[0]
-            target_loc = int(tokens[1]) + start_of_text
-            start_fwd_pos = max(start_of_text, target_loc - rel_words)
-            start_bckwd_pos = min(target_loc + rel_words + 1, len(tokens) - 1)
 
+            # Location of target word
+            target_loc = int(tokens[1]) + start_of_text
+
+            # First word in our context window. Using Max to avoid going out of bounds
+            start_fwd_pos = max(start_of_text, target_loc - REL_WORDS)
+
+            # Last word in our context window. Using Minx to avoid going out of bounds
+            start_bckwd_pos = min(target_loc + REL_WORDS + 1, len(tokens) - 1)
+
+            # Create a vector that is going to be the sum of the relevant words before our target word
             fwd_embedding = np.zeros(EMBED_DIM, dtype=float)
             for token in tokens[start_fwd_pos:target_loc]:
-                fwd_embedding += word_embeddings[vocab[token]]
+                fwd_embedding += self.word_embeddings[self.vocab[token]]
 
+            # Create a vector that is going to be the sum of the relevant words after our target word
             bckwd_embedding = np.zeros(EMBED_DIM, dtype=float)
             for token in reversed(tokens[target_loc + 1:start_bckwd_pos]):
-                bckwd_embedding += word_embeddings[vocab[token]]
+                bckwd_embedding += self.word_embeddings[self.vocab[token]]
 
+            # Create the input vector data point by concatenating the forward and backward embeddings
             input_vector = np.zeros(EMBED_DIM * 2)
             input_vector[:EMBED_DIM] = fwd_embedding
             input_vector[EMBED_DIM:] = bckwd_embedding
 
             input_vector = input_vector.tolist()
-            #input_vector[-1] = lemma_enc[lemma]
 
             X.append(input_vector)
         return X
 
-    def fit(self, X, Y):
+    def init_embeddings(self):
+
+        """Extract the embeddings and create a vocab that maps to the correct embedding"""
+
+        print("extracting embeddings...")
 
         file_glove = open(GLOVE_FILE, 'r', encoding='utf-8')
         lines = file_glove.readlines()
         num_lines = len(lines)
+
+        # I create one more row for the embeddings that is dedicated to a word not present in the vocab
         self.word_embeddings = np.zeros((num_lines + 1, EMBED_DIM), dtype=float)
         self.vocab = defaultdict(lambda: num_lines)
-        self.vocab_rev = defaultdict(lambda: '<UNKNOWN>')
 
+        # Read all word -> embedding mappings and enter into our data structures
         for i, line in enumerate(lines):
             embed_split = line.split()
             word = embed_split[0]
             self.vocab[word] = i
-            self.vocab_rev[i] = word
-
             embed_vals = np.asarray(embed_split[1:], dtype=float)
-
             self.word_embeddings[i, :] = embed_vals
 
+        # Define a non existing word to map to an array of zeros
         self.word_embeddings[num_lines, :] = np.zeros(EMBED_DIM)
-
         file_glove.close()
+
+
+    def fit(self, X, Y):
+
+        self.init_embeddings()
         categories = []
         self.lemma_enc = dict()
         self.num_categories = 0
@@ -303,7 +309,8 @@ class MultiClassifier:
             else:
                 categories.append(self.lemma_enc[lemma])
 
-        X = self.preprocess_X(self.vocab, self.word_embeddings, X, self.lemma_enc)
+        print('preprocessing training data...')
+        X = self.preprocess_X(X)
 
         self.main_lbl_encoder.fit(Y)
         Y = self.main_lbl_encoder.transform(Y)
@@ -316,7 +323,7 @@ class MultiClassifier:
             Y_sep[categories[i]].append(Y[i])
 
         for i in range(self.num_categories):
-            classifier = NNClassifier()
+            classifier = NNClassifier(self.n_epochs)
             lblenc = LabelEncoder()
             lblenc.fit(Y_sep[i])
             y_sep_i_enc = lblenc.transform(Y_sep[i])
@@ -333,7 +340,8 @@ class MultiClassifier:
             lemma = X[i][0].split('.')[0]
             X_categories[self.lemma_enc[lemma]].append(i)
 
-        X = self.preprocess_X(self.vocab, self.word_embeddings, X, self.lemma_enc)
+        print('preprocessing test data...')
+        X = self.preprocess_X(X)
         X_sep = [[] for _ in range(self.num_categories)]
 
         for i in range(self.num_categories):
