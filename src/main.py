@@ -1,5 +1,6 @@
 from classifier_1 import MultiClassifier
 from classifier_2 import RNNClassifier
+import matplotlib.pyplot as plt
 import argparse
 import sys
 
@@ -35,18 +36,28 @@ if __name__ == '__main__':
     x_train, y_train = get_data('data/wsd_train.txt')
     x_test, _ = get_data('data/wsd_test_blind.txt')
 
-    classifier = None
+    clf = None
     if args.classifier == 1:
-        classifier = MultiClassifier()
+        clf = MultiClassifier()
     elif args.classifier == 2:
-        classifier = RNNClassifier()
+        clf = RNNClassifier()
     else:
         print("No such classifier found")
         exit(-1)
 
-    classifier.fit(x_train, y_train)
-    predictions = classifier.predict(x_test)
+    clf.fit(x_train, y_train)
+    predictions = clf.predict(x_test)
 
-    f = open('predictions_1.txt', 'w', encoding='utf-8')
+    f = open('pred', 'w', encoding='utf-8')
     for p in predictions:
         f.write(p + '\n')
+
+    plt.style.use('seaborn')
+
+    x = range(len(clf.history['train_loss']))
+    fig, ax = plt.subplots(1, 2, figsize=(2 * 6, 1 * 6))
+    ax[0].plot(x, clf.history['train_loss'], x, clf.history['val_loss'])
+    ax[0].legend(['train loss', 'val loss'])
+    ax[1].plot(x, clf.history['train_acc'], x, clf.history['val_acc'])
+    ax[1].legend(['train acc', 'val acc'])
+    plt.savefig("classifier_" + str(args.classifier) + "_results.png")

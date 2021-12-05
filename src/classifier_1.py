@@ -8,6 +8,8 @@ from tqdm import tqdm
 from collections import defaultdict
 from sklearn.model_selection import train_test_split
 
+EMBED_DIM = 300
+GLOVE_FILE = 'data/glove.6B/glove.6B.' + str(EMBED_DIM) + 'd.txt'
 
 class ClassifierParameters:
     """Container class to store the hyperparameters that control the training process."""
@@ -16,7 +18,7 @@ class ClassifierParameters:
     # Computation device: 'cuda' or 'cpu'
     device = 'cpu'
     # Number of hidden units in the neural network.
-    n_hidden_units = 50
+    n_hidden_units = 300
     # Number of training epochs.
     n_epochs = 100
     # Size of batches: how many documents to process in parallel.
@@ -34,7 +36,7 @@ def make_model(clf):
     hidden_size = clf.params.n_hidden_units
     model = nn.Sequential(
         nn.BatchNorm1d(input_size),
-        #nn.Dropout(p=clf.params.dropout),
+        nn.Dropout(p=clf.params.dropout),
         nn.Linear(input_size, hidden_size),
         nn.ReLU(),
         nn.BatchNorm1d(hidden_size),
@@ -144,7 +146,7 @@ class NNClassifier:
             else:
                 self.early_stopping_itr += 1
 
-            if self.early_stopping_itr > 10:
+            if self.early_stopping_itr > 15:
                 break
 
     def epoch(self, batches, optimizer=None):
@@ -230,7 +232,7 @@ class NNClassifier:
             # Finally, concatenate all output arrays.
             return np.hstack(outputs)
 
-EMBED_DIM = 100
+
 class MultiClassifier:
     def __init__(self):
         self.classifiers = dict()
@@ -240,7 +242,7 @@ class MultiClassifier:
     def preprocess_X(self, vocab, word_embeddings, X_data, lemma_enc):
 
         start_of_text = 2
-        rel_words = 2
+        rel_words = 20
         # X = np.empty((len(X_data), (EMBED_DIM * 2) + 1), dtype=float)
         X = []
         for i, tokens in enumerate(X_data):
@@ -257,19 +259,19 @@ class MultiClassifier:
             for token in reversed(tokens[target_loc + 1:start_bckwd_pos]):
                 bckwd_embedding += word_embeddings[vocab[token]]
 
-            input_vector = np.zeros(EMBED_DIM * 2 + 1)
+            input_vector = np.zeros(EMBED_DIM * 2)
             input_vector[:EMBED_DIM] = fwd_embedding
-            input_vector[EMBED_DIM:-1] = bckwd_embedding
+            input_vector[EMBED_DIM:] = bckwd_embedding
 
             input_vector = input_vector.tolist()
-            input_vector[-1] = lemma_enc[lemma]
+            #input_vector[-1] = lemma_enc[lemma]
 
             X.append(input_vector)
         return X
 
     def fit(self, X, Y):
 
-        file_glove = open('data/glove.6B/glove.6B.100d.txt', 'r', encoding='utf-8')
+        file_glove = open(GLOVE_FILE, 'r', encoding='utf-8')
         lines = file_glove.readlines()
         num_lines = len(lines)
         self.word_embeddings = np.zeros((num_lines + 1, EMBED_DIM), dtype=float)
