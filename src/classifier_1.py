@@ -8,11 +8,14 @@ from tqdm import tqdm
 from collections import defaultdict
 from sklearn.model_selection import train_test_split
 
+# Definitions
 EMBED_DIM = 300
 GLOVE_FILE = 'glove.6B/glove.6B.' + str(EMBED_DIM) + 'd.txt'
 REL_WORDS = 4
 
 class ClassifierParameters:
+    """This method has been copied from Week1 self study notebook, with a few modifications"""
+
     """Container class to store the hyperparameters that control the training process."""
     # Proportion of data set aside for validation.
     val_size = 0.2
@@ -30,6 +33,9 @@ class ClassifierParameters:
     dropout = 0.5
 
 def make_model(clf):
+    """This method has been copied from Week1 self study notebook, with a few modifications"""
+
+    """Method for creating the neural network model"""
     input_size = clf.input_size
     output_size = clf.n_classes
     hidden_size = clf.params.n_hidden_units
@@ -57,17 +63,14 @@ class NNClassifier:
         self.n_epochs = n_epochs
 
     def preprocess(self, X, Y):
+        """This method has been copied from Week1 self study notebook"""
+
         """Carry out the document preprocessing, then build `DataLoader`s for the
            training and validation sets."""
 
-        # Split X and Y into training and validation sets. We
-        # apply the utility function we used previously.
+        # Split X and Y into training and validation sets.
         Xtrain, Xval, Ytrain, Yval = train_test_split(X, Y, test_size=self.params.val_size, random_state=0)
 
-        # As discussed above, a dataset simply needs to behave like a list: it should
-        # be aware of its length and be able to index:
-        # dataset[position] should give an x,y pair (input and output).
-        # This means that we can simply use lists here!
         train_dataset = list(zip(Xtrain, Ytrain))
         val_dataset = list(zip(Xval, Yval))
 
@@ -76,6 +79,9 @@ class NNClassifier:
         self.val_loader = DataLoader(val_dataset, batch_size=self.params.batch_size)
 
     def fit(self, X, Y):
+
+        """This method has been copied from Week1 self study notebook, with a few modifications"""
+
         """Train the model. We assume that a dataset and a model have already been provided."""
         par = self.params
 
@@ -129,6 +135,8 @@ class NNClassifier:
             # Show validation-set metrics on the progress bar.
             progress.set_postfix({'val_loss': f'{val_loss:.2f}', 'val_acc': f'{val_acc:.2f}'})
 
+            # I use early stopping. If the classifier has not beaten its best validation score for 15 epochs,
+            # the training is terminated early.
             if val_loss < self.lowest_loss:
                 self.lowest_loss = val_loss
                 self.early_stopping_itr = 0
@@ -139,6 +147,8 @@ class NNClassifier:
                 break
 
     def epoch(self, batches, optimizer=None):
+        """This method has been copied from Week1 self study notebook, with a few modifications"""
+
         """Runs the neural network for one epoch, using the given batches.
         If an optimizer is provided, this is training data and we will update the model
         after each batch. Otherwise, this is assumed to be validation data.
@@ -153,24 +163,13 @@ class NNClassifier:
         # of this batch, respectively.
         for Xbatch, Ybatch in batches:
 
-            # Xbatch is a tensor of shape (batch_size, input_size).
-            # Ybatch has the shape (batch_size).
-
-            # If we're using the GPU, move the batch there.
             Xbatch = Xbatch.to(self.params.device)
             Ybatch = Ybatch.to(self.params.device)
 
             # Compute the predictions for this batch.
             scores = self.model(Xbatch.float())
 
-            # If the previous step was implemented correctly, your scores
-            # tensor should have the shape (batch_size, n_classes).
-
-            # Compute the loss for this batch. Note: various loss functions
-            # behave differently, depending on whether they aggregate or not
-            # (that is, by summing or averaging).
-            # In the end, the loss value needs to be a single number so
-            # that we can compute gradients and update our model later.
+            # Compute the loss for this batch.
             loss = self.loss_func(scores, Ybatch.long())
 
             total_loss += loss.item()
@@ -192,9 +191,11 @@ class NNClassifier:
         return total_loss / len(batches), n_correct / n_instances
 
     def predict(self, X):
+        """This method has been copied from Week1 self study notebook, with a few modifications"""
+
         """Run a trained classifier on a set of instances and return the predictions."""
 
-        # Build a DataLoader to generate the batches, as above except that now we don't have Y.
+        # Build a DataLoader to generate the batches.
         loader = DataLoader(X, batch_size=self.params.batch_size)
 
         # Apply the model to all the batches and aggregate the predictions.
@@ -223,6 +224,10 @@ class NNClassifier:
 
 
 class MultiClassifier:
+
+    """A classifier that is actually just an orchestrator for a set of sub classifiers. One sub classifier handles one
+    target word lemma."""
+
     def __init__(self, n_epochs):
         self.classifiers = dict()
         self.main_lbl_encoder = LabelEncoder()
@@ -244,7 +249,7 @@ class MultiClassifier:
             # First word in our context window. Using Max to avoid going out of bounds
             start_fwd_pos = max(start_of_text, target_loc - REL_WORDS)
 
-            # Last word in our context window. Using Minx to avoid going out of bounds
+            # Last word in our context window. Using min to avoid going out of bounds
             start_bckwd_pos = min(target_loc + REL_WORDS + 1, len(tokens) - 1)
 
             # Create a vector that is going to be the sum of the relevant words before our target word
@@ -281,7 +286,7 @@ class MultiClassifier:
         self.word_embeddings = np.zeros((num_lines + 1, EMBED_DIM), dtype=float)
         self.vocab = defaultdict(lambda: num_lines)
 
-        # Read all word -> embedding mappings and enter into our data structures
+        #  Read all word -> embedding mappings and enter into our data structures
         for i, line in enumerate(lines):
             embed_split = line.split()
             word = embed_split[0]
@@ -297,6 +302,10 @@ class MultiClassifier:
     def fit(self, X, Y):
 
         self.init_embeddings()
+
+        # Here I go through Y and register in categories which lemma each datapoint in Y corresponds to. This is so
+        # that the correct datapoints will be send to the correct classifier, specific for that word.
+        # At the same time, I'm constructing a lemma_enc dict which maps a lemma to an integer
         categories = []
         self.lemma_enc = dict()
         self.num_categories = 0
@@ -312,16 +321,21 @@ class MultiClassifier:
         print('preprocessing training data...')
         X = self.preprocess_X(X)
 
+        # Fit LabelEncoder
         self.main_lbl_encoder.fit(Y)
         Y = self.main_lbl_encoder.transform(Y)
 
+        # Seperate the data into different arrays so that one array contains datapoints relating to one lemma
         X_sep = [[] for _ in range(self.num_categories)]
         Y_sep = [[] for _ in range(self.num_categories)]
 
+        # Append to correct array by looking at what category (lemma) the datapoint belongs to
         for i in range(len(X)):
             X_sep[categories[i]].append(X[i])
             Y_sep[categories[i]].append(Y[i])
 
+        # Go through all the categories (lemmas) and create and train one classifier for each. We must also know
+        # the label encoder for this classifier so we can map the results back
         for i in range(self.num_categories):
             classifier = NNClassifier(self.n_epochs)
             lblenc = LabelEncoder()
@@ -334,25 +348,36 @@ class MultiClassifier:
 
 
     def predict(self, X):
+
+        # Arrays for storing which index of X belongs to which category.
         X_categories = [[] for _ in range(self.num_categories)]
 
+        # Register what indexes of X should be in which array
         for i in range(len(X)):
             lemma = X[i][0].split('.')[0]
             X_categories[self.lemma_enc[lemma]].append(i)
 
         print('preprocessing test data...')
         X = self.preprocess_X(X)
+
+        # Array for storing the different partitions of X depending on what category they belong to
         X_sep = [[] for _ in range(self.num_categories)]
 
+        # Sort X into partitions
         for i in range(self.num_categories):
             for j in X_categories[i]:
                 X_sep[i].append(X[j])
 
 
+        # Go through and make predictions for each category.
         all_predictions = ["" for _ in range(len(X))]
         for i in range(self.num_categories):
             predictions = self.classifiers[i].predict(np.array(X_sep[i]))
+
+            # Translate to MultiClassifiers encoding system
             predictions = self.label_encoders[i].inverse_transform(predictions)
+
+            # Translate to normal words
             predictions = self.main_lbl_encoder.inverse_transform(predictions)
             for j, p in enumerate(predictions):
                 all_predictions[X_categories[i][j]] = p

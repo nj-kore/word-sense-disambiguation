@@ -13,21 +13,23 @@ EMBED_DIM = 100
 GLOVE_FILE = 'glove.6B/glove.6B.' + str(EMBED_DIM) + 'd.txt'
 REL_WORDS = 10
 
-class RNNModel(nn.Module):
+class LSTMModel(nn.Module):
+
+    """Model for an RNN. """
     def __init__(self, clf):
-        super(RNNModel, self).__init__()
+        super(LSTMModel, self).__init__()
 
         self.rnn_input_size = clf.input_size
         self.hidden_units = clf.params.hidden_units
-        self.rnn_hidden_layers = clf.params.rnn_hidden_layers
+        self.lstm_hidden_layers = clf.params.lstm_hidden_layers
         self.input_bn = nn.BatchNorm1d(REL_WORDS+1)
 
         # The BI-LSTM has been split up to two networks, as described in my report
-        self.rnn_fwd = nn.LSTM(self.rnn_input_size, self.hidden_units,
-                          self.rnn_hidden_layers, batch_first=True)
+        self.lstm_fwd = nn.LSTM(self.rnn_input_size, self.hidden_units,
+                                self.lstm_hidden_layers, batch_first=True)
 
-        self.rnn_bckwd = nn.LSTM(self.rnn_input_size, self.hidden_units,
-                          self.rnn_hidden_layers, batch_first=True)
+        self.lstm_bckwd = nn.LSTM(self.rnn_input_size, self.hidden_units,
+                                  self.lstm_hidden_layers, batch_first=True)
 
         # Output fully connected network
         # Having the "+1" seemed to yield slighlty better results. Perhaps keeping the layers equal size makes for
@@ -52,14 +54,15 @@ class RNNModel(nn.Module):
         lemma = x[:, 2, 0, 0]
 
         # Init hidden state and cell state to zeros
-        h0 = torch.zeros(self.rnn_hidden_layers, x.size(0), self.hidden_units, requires_grad=True)
-        c0 = torch.zeros(self.rnn_hidden_layers, x.size(0), self.hidden_units, requires_grad=True)
+        h0 = torch.zeros(self.lstm_hidden_layers, x.size(0), self.hidden_units, requires_grad=True)
+        c0 = torch.zeros(self.lstm_hidden_layers, x.size(0), self.hidden_units, requires_grad=True)
 
         # Feed into the BI-LSTM
-        _, (hn_fwd, cn_fwd) = self.rnn_fwd(x_fwd, (h0.detach(), c0.detach()))
-        _, (hn_bckwd, cn_bckwd) = self.rnn_bckwd(x_bckwd, (h0.detach(), c0.detach()))
+        _, (hn_fwd, cn_fwd) = self.lstm_fwd(x_fwd, (h0.detach(), c0.detach()))
+        _, (hn_bckwd, cn_bckwd) = self.lstm_bckwd(x_bckwd, (h0.detach(), c0.detach()))
 
-        # Create a new input to the output network by concatenating hidden states and adding the encoded at the end
+        # Create a new input to the output network by concatenating hidden states and adding the encoded lemma at the
+        # end
         inp = torch.zeros((x.size(0), 2*self.hidden_units + 1))
         hidden_concat = torch.cat((hn_fwd[0], hn_bckwd[0]), dim=1)
         inp[:, :-1] = hidden_concat
@@ -71,6 +74,8 @@ class RNNModel(nn.Module):
 
 
 class ClassifierParameters:
+    """This method has been copied from Week1 self study notebook, with a few modifications"""
+
     """Container class to store the hyperparameters that control the training process."""
     # Proportion of data set aside for validation.
     val_size = 0.2
@@ -92,11 +97,11 @@ class ClassifierParameters:
 
 # Wrapper for creating the network
 def make_model(clf):
-    return RNNModel(clf)
+    return LSTMModel(clf)
 
 
-class RNNClassifier:
-    """A classifier based on a recurrent neural network."""
+class LSTMClassifier:
+    """A classifier based on a Long Short Term Memory network."""
 
     def __init__(self, n_epochs):
         self.params = ClassifierParameters()
@@ -169,7 +174,7 @@ class RNNClassifier:
             for j, token in enumerate(reversed(tokens[target_loc:start_bckwd_pos])):
                 bckwd_embeddings[j + REL_WORDS - offset] = self.word_embeddings[self.vocab[token]]
 
-            # The lemma_arr has a dimension of (REL_WORDS+1, EMBED_DIM) but it only contains one row with the word
+            # The lemma_arr has a dimension of (REL_WORDS+1, EMBED_DIM) but it uses one row with the word
             # embedding for the current lemma, and one position containing the encoded index for the lemma. The
             # lemma_arr had to be this size to avoid problems with tensors, but a lot of rows remained unused for
             # this array
@@ -202,6 +207,7 @@ class RNNClassifier:
         # Convert Y to the encoded version
         Y = self.main_lbl_encoder.transform(Y)
 
+        """The below code has been copied from Week1 self study notebook"""
         # Split X and Y into training and validation sets.
         Xtrain, Xval, Ytrain, Yval = train_test_split(X, Y, test_size=self.params.val_size, random_state=0)
 
@@ -215,6 +221,9 @@ class RNNClassifier:
         return X, Y
 
     def fit(self, X, Y):
+
+        """This method has been copied from Week1 self study notebook, with a few modifications"""
+
         """Train the model"""
         par = self.params
         self.init_embeddings()
@@ -275,6 +284,9 @@ class RNNClassifier:
 
 
     def epoch(self, batches, optimizer=None):
+
+        """This method has been copied from Week1 self study notebook, with a few modifications"""
+
         """Runs the neural network for one epoch, using the given batches.
         If an optimizer is provided, this is training data and we will update the model
         after each batch. Otherwise, this is assumed to be validation data.
@@ -318,6 +330,9 @@ class RNNClassifier:
         return total_loss / len(batches), n_correct / n_instances
 
     def predict(self, X):
+
+        """This method has been copied from Week1 self study notebook, with a few modifications"""
+        
         """Run a trained classifier on a set of instances and return the predictions."""
         X = self._preprocess_X(X)
 

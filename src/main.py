@@ -1,12 +1,16 @@
 from classifier_1 import MultiClassifier
-from classifier_2 import RNNClassifier
+from classifier_2 import LSTMClassifier
 import matplotlib.pyplot as plt
 import argparse
 
-USE_EMBEDDING = True
-
-
+# DAT450  Assignment3  Word Sense Disambiguation
+# By Jonathan Köre
 def get_data(path):
+
+    """
+    Extracts data from the data file. The first word is put into Y and the remaining words are put into X.
+    Everything is lowercased.
+    """
     file_train = open(path, 'r', encoding='utf-8')
     file_lines = file_train.readlines()
     X = []
@@ -29,6 +33,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     print('extracting data into training and test data...')
+
+    # Fetch data
     x_train, y_train = get_data('data/wsd_train.txt')
     x_test, _ = get_data('data/wsd_test_blind.txt')
 
@@ -36,7 +42,7 @@ if __name__ == '__main__':
     if args.classifier == 1:
         clf = MultiClassifier(args.n_epochs)
     elif args.classifier == 2:
-        clf = RNNClassifier(args.n_epochs)
+        clf = LSTMClassifier(args.n_epochs)
     else:
         print("No such classifier found")
         exit(-1)
@@ -48,6 +54,7 @@ if __name__ == '__main__':
     for p in predictions:
         f.write(p + '\n')
 
+    # Print the results.
     if (args.classifier == 2):
         plt.style.use('seaborn')
         x = range(len(clf.history['train_loss']))
